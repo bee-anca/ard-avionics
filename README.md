@@ -8,9 +8,9 @@ Data rate is important in rocketry, so the goal is to minimise the `void loop()`
 The following code is placed at the end of the `void loop()` function to track the time required (in microseconds) to complete a loop.
 
 ```c
-static long last = 0;
-long now = micros();
-Serial.print(now - last);
-last = now;
+  static long last = 0;
+  long now = micros();
+  Serial.println(now - last);
+  last = now;
 ```
 

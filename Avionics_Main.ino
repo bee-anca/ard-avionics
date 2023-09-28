@@ -27,6 +27,8 @@ Adafruit_LSM6DSOX LSM;
   sensors_event_t temp_lsm;
 
 //Define IMU: BNO085
+#define BNO08X_RESET -1
+
 Adafruit_BNO08x  bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
 
@@ -48,11 +50,13 @@ Pins pins;
 //Define other variables
 float referencePressure;
 
-uint8_t eventCode = 0;
+uint8_t event_code = 0;
 float lastHeight =0;
 float currentHeight=0;
 float maxHeight = 0;
 int count = 0;
+unsigned long startFireTime = 0;
+unsigned long currentFireTime = 0;
 
 //Set flight conditions
 unsigned long apogeeDelay = 0; //Not sure if needed
@@ -77,6 +81,7 @@ typedef struct{
   bool boosterBurnout = false;
   bool apogee = false;
   bool apogeeDeploy = false;
+  bool descent = false;
   bool touchdown = false; //can be used to lower sampling rate
 } eventList;
 
@@ -93,7 +98,7 @@ typedef struct {
   char touchdown = 6;
 } eventCode;
 
-eventCode eventcode;
+eventCode codes;
 
 void setup() {
   //Set serial
@@ -114,22 +119,22 @@ void setup() {
   //Start sensors (IMU, High G, Baro)
   beginLPS(lpsAddr);
   beginLSM(lsmAddr);
-  beginBNO();
+  //beginBNO();
 
   //Calibration (IMU, High G, Baro) 
   //-> Determine direction/orientation of the rocket -> set g to the accel of the longitudinal axis
   //-> Reset height to 0
   //Avionics must be stabilized at launch position for the duration of calibration 
-  calibrateLPS();
-  calibrateLSM();
+  calibrateLPS(referencePressure);
+  calibrateLSM(errorAccX, errorAccY, errorAccZ, errorGyrX, errorGyrY, errorGyrZ);
   //BNO is already calibrated but after the calibration of the other two sensors, should move and rotate the avionics to improve readings
   
-  float g = //longtiudinal accel
-  float gTrigger = 2 * g; //Set a g trigger to detect launch
-
 }
 
 void loop() {
+  float g = errorAccZ //longtiudinal accel (CHANGE THIS TO THE RIGHT ORIENTATION)
+  float gTrigger = 2 * g; //Set a g trigger to detect launch
+
   //Get baro data (Height, Pressure, Temp)
   LPS.getEvent(&pressure,&temp);
   float temperatureK = temp.temperature + 273.15;
@@ -140,16 +145,16 @@ void loop() {
   //BNO is rated to 8g
 
   if (!events.liftoff) {
-    if (/*longitudinal accel: lsm accel || bno accel */ > gTrigger) {
+    if (/*longitudinal accel: lsm accel || bno accel */ accel.acceleration.z > gTrigger) /*(CHANGE THIS TO THE RIGHT ORIENTATION)*/{
       events.preLiftoff = false;
       events.liftoff = true;
     }
-    eventCode = eventcode.preLiftoff;
+    event_code = events.preLiftoff;
     //Sampling rate?
   }
 
   if (events.liftoff) {
-    eventCode = eventcode.liftoff;
+    event_code = events.liftoff;
     //Sampling rate?
     
     //Calculate height difference, set max height
@@ -171,19 +176,19 @@ void loop() {
     //Check apogee detection if yes then fire pyro charge
     if (events.apogee && pyro1.pyroArmed && digitalRead(pins.pyro1Fire) == LOW) {
       //log the time at pyro charge firing
-      unsigned long startFireTime = millis();
+      startFireTime = millis();
       digitalWrite(pins.pyro1Fire, HIGH);
     }
 
     //When the pyro is fired, keep checking if firing time is reached
     if (events.apogee && pyro1.pyroArmed && digitalRead(pins.pyro1Fire) == HIGH) {
-      unsigned long currentFireTime = millis();
+      currentFireTime = millis();
       if (currentFireTime - startFireTime >= fireTime) {
         digitalWrite(pins.pyro1Fire, LOW);
         
         pyro1.pyroArmed = false;
         event.apogeeDeploy = true;
-        eventCode = eventcode.parachute;
+        event_code = codes.parachute;
       }
     }
   }
@@ -197,29 +202,29 @@ void loop() {
 
 void checkEvents() {
   //Arm Pyro
-  if (events.liftoff && !pyro1.pyroArmed && !event.apogeeDeploy && currentHeight >= altLockOut) {
+  if (events.liftoff && !pyro1.pyroArmed && !events.apogeeDeploy && currentHeight >= altLockOut) {
     pyro1.pyroArmed = true;
   }
   //Motor burnout
-  if (events.liftoff && !events.boosterBurnout && /*longitudinal accel: lsm accel || bno accel*/ <=0) {
+  if (events.liftoff && !events.boosterBurnout && /*longitudinal accel: lsm accel || bno accel*/ accel.acceleration.z <= 0) {
     events.boosterBurnout = true;
-    eventCode = eventcode.boosterBurnout;
+    event_code = codes.boosterBurnout;
   }
   //Apogee when 10 continuous decreasing measurments have been recorded
   if (events.liftoff && !events.apogee && count >= 10) {
     events.apogee = true;
-    eventCode = eventcode.apogee;
+    event_code = codes.apogee;
   }
   //Parachute Deployment
 
   if (events.liftoff && !events.descent && currentHeight < maxHeight - 50) {
     events.descent = true;
-    eventCode = eventcode.descent;
+    event_code = codes.descent;
   }
   //Touchdown 
   if (events.descent && !events.touchdown && currentHeight < 10) {
     events.touchdown = true;
-    eventCode = eventcode.touchdown;
+    event_code = codes.touchdown;
   }
 }
 
@@ -242,6 +247,7 @@ void beginLSM(uint8_t address) {
   LSM.setGyroDataRate(LSM6DS_RATE_104_HZ);
 }
 
+/*
 void beginBNO() {
   if (!bno08x.begin_I2C()) {
     Serial.println("Failed to find BNO08x chip");
@@ -264,6 +270,7 @@ void beginBNO() {
     Serial.println("Could not enable gravity");
   }
 }
+*/
 
 void calibrateLPS(float& referencePressure) {
 
@@ -306,6 +313,7 @@ void calibrateLSM(float& errorAccX, float& errorAccY, float& errorAccZ, float& e
 }
 
 //Not finished
+/*
 void getBNO() {
   if (!bno08x.getSensorEvent(&sensorValue)) {
     return;
@@ -354,3 +362,4 @@ void getBNO() {
     Serial.println(sensorValue.un.gravity.z);
     break;
 }
+*/
